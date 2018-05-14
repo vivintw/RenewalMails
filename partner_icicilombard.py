@@ -3,6 +3,7 @@ import base64
 import json
 import requests
 import time
+import datetime
 from bs4 import BeautifulSoup
 
 class icici:
@@ -56,35 +57,97 @@ class icici:
         res = self.session.get(url, allow_redirects=False)
         return '/Login.htm' in res.headers['location']
 
+    def __parse_form_inputs(self,result):
+            payload = {}
+
+            soup = BeautifulSoup(result, 'html.parser')
+            f1 = soup.find_all('form')[0]
+            for i in f1.find_all('input'):
+                attributes = i.attrs
+                payload[attributes['name']] = ""
+                if 'value' in attributes :
+                    payload[attributes['name']] = attributes['value']
+            return payload
+
     def extract(self):
-        url = "https://ipartner.icicilombard.com/Webpages/CorporateApp/LandingPage.aspx?GUID="+self.guid
-        res = self.session.get(url)
+        self.session.headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
         #TODO parse data into csv data and return csv data
-        payload = {}
-
-        soup = BeautifulSoup(res.text, 'html.parser')
-        f1 = soup.find_all('form')[0]
-        for i in f1.find_all('input'):
-            attributes = i.attrs
-            payload[attributes['name']] = ""
-            if 'value' in attributes :
-                payload[attributes['name']] = attributes['value']
-        print json.dumps(payload,indent=4)
-
+        url = "https://ipartner.icicilombard.com/Webpages/CorporateApp/LandingPage.aspx?GUID="+self.guid
+        res = self.session.get(url)
+        payload = self.__parse_form_inputs(res.text)
         time.sleep(1)
 
         url = "https://ipartner.icicilombard.com/WebPages/SwapSession.aspx"
-        self.session.headers['Content-Type'] = 'application/x-www-form-urlencoded'
         res = self.session.post(url,data=payload)
-        print res.content
+        # sanity check make sure the login was successful
+        if not 'welcome' in res.url:
+            print "unable to login"
+            return
+
+        url = "https://ipartner.icicilombard.com/WebPages/Agents/RenewalPolicies.aspx"
+        res = self.session.get(url)
+        payload = self.__parse_form_inputs(res.text)
+        payload['ctl00$headA$motorQuote$txtPolicyNo'] = ""
+        payload['ctl00$headA$motorQuote$PolicyLengthExtender_ClientState'] = ""
+        payload['ctl00$headA$motorQuote$vehicleType'] =  'rdbNew'
+        payload['ctl00$headA$motorQuote$prodGrop'] = 'rdbCar'
+        payload['ctl00$headA$motorQuote$ddEngineChasisNo'] = '0'
+        payload['HiddenInput'] = ""
+        payload['ctl00$ContentPlaceHolder1$ImageButton1.y'] = '11'
+        payload['ctl00$ContentPlaceHolder1$ddProductCategory'] = '1'
+        payload['ctl00$headA$motorQuote$ValidatorCalloutExtender1_ClientState'] = ""
+        payload['ctl00$ToolkitScriptManager1'] = 'ctl00$ContentPlaceHolder1$updpnlTagging|ctl00$ContentPlaceHolder1$ImageButton1'
+        payload['ctl00$ContentPlaceHolder1$ImageButton1.x'] = '72'
+        payload['ctl00_ToolkitScriptManager1_HiddenField']= ';;AjaxControlToolkit, Version=3.5.40412.0, Culture=neutral, PublicKeyToken=28f01b0e84b6d53e'
+        payload['__ASYNCPOST']=  'true'
+        payload['ctl00$headA$motorQuote$txtEngineChasisNo'] = ""
+        payload['PageLoadedHiddenTxtBox'] =  'Set'
+        payload['ctl00$ContentPlaceHolder1$ddProductSubCategory'] = '0'
+
+        today = datetime.datetime.today()
+        payload['ctl00$ContentPlaceHolder1$ddMonth'] = str(today.month)
+        payload['ctl00$ContentPlaceHolder1$ddYear'] =  str(today.year)
+
+        time.sleep(1)
+        res = self.session.post(url,data=payload)
+
+        soup = BeautifulSoup(res.text, 'html.parser')
+        tables = soup.find_all('table')
+        table_data = []
+        # only tables 8,9,10 are data
+        for table in tables[8:]:
+            for row in table.find_all('tr'):
+                cols = row.find_all('td')
+                if cols:
+                    curr_cols = []
+                    for i,c in enumerate(cols):
+                        # get links instead of text of the specified columns
+                        if i in [7]:
+                            curr_cols.append('https://ipartner.icicilombard.com' + c.find('a').attrs['href'])
+                        else:
+                            curr_cols.append(c.text)
+                    table_data.append(curr_cols)
+
+        #get the vehicle type number from show RN
+        output_table = []
+        for table in table_data:
+            print "fetching : ",table[7]
+            res = self.session.get(table[7])
+            soup = BeautifulSoup(res.text, 'html.parser')
+            _table = soup.find('table',{'id' : 'tblVehicleDetails'})
+            output_table.append(table[:-1] + [ele.text for ele in _table.find_all('tr')[1].find_all('td')[:2]])
+
+        return output_table
 
 
 
 
 if __name__ == "__main__":
     c = icici()
-    print c.login("test","test")
-    c.extract()
+    c.login("test","test")
+    data = c.extract()
     time.sleep(2)
-    print c.logout()
+    c.logout()
+    for i in data:
+        print i
